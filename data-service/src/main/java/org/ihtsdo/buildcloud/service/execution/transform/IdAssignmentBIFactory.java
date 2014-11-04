@@ -19,5 +19,4 @@ public class IdAssignmentBIFactory {
 			return onlineImplementation;
 		}
 	}
-
 }

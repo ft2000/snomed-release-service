@@ -22,7 +22,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 
 
-public class LegacyIdTransformationService{
+public class LegacyIdTransformationService {
+	private static final String STATED_RELATIONSHIP_DELTA_FILE_PREFIX = "sct2_StatedRelationship_Delta_INT_";
+	private static final String REFSET_SIMPLE_MAP_DELTA_FILE_PREFIX = "der2_sRefset_SimpleMapDelta_INT_";
 	private static final String SNOMED_ID_REFSET_ID = "900000000000498005";
 	private static final String CTV3_ID_REFSET_ID = "900000000000497000";
 	private static final String TAB = "\t";
@@ -44,19 +46,18 @@ public class LegacyIdTransformationService{
 		for (final UUID uuid : newConceptUuids) {
 			final Long sctId = cachedSctidFactory.getSCTIDFromCache(uuid.toString());
 			if (sctId != null) {
-				LOGGER.debug("SctId:" + sctId + " UUID:"+ uuid.toString());
-				sctIds.add(sctId);
-			}
-			else {
+				LOGGER.debug("SctId:" + sctId + " UUID:" + uuid.toString());
+				sctIds.add(sctId); 
+				} else {
 				LOGGER.error("Failed to find sctId from cache for UUID:" +  uuid.toString());
 			}
 		}
 		final String effectiveDate = execution.getBuild().getEffectiveTimeSnomedFormat();
-		final String simpleRefsetMapDelta = "der2_sRefset_SimpleMapDelta_INT_" + effectiveDate + RF2Constants.TXT_FILE_EXTENSION;
+		final String simpleRefsetMapDelta = REFSET_SIMPLE_MAP_DELTA_FILE_PREFIX + effectiveDate + RF2Constants.TXT_FILE_EXTENSION;
 		final String packageBusinessKey = execution.getBuild().getBusinessKey();
 		
 		final InputStream inputStream = executionDAO.getTransformedFileAsInputStream(execution, packageBusinessKey, simpleRefsetMapDelta);
-		if ( inputStream == null) {
+		if (inputStream == null) {
 			LOGGER.info("No transformed file found for " + simpleRefsetMapDelta);
 			//no need to generate legacy id mapping as maybe simple Refset map is not in the manifest file.
 			return;
@@ -64,13 +65,12 @@ public class LegacyIdTransformationService{
 		//can't append to existing file so need to read them into memory and write again along with additional data.
 		final List<String> existingLines = new ArrayList<>();
 		try (final BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
-			
 			String line = null;
 			while ((line = reader.readLine()) != null) {
 				existingLines.add(line);
 			}
 		} catch (final IOException e) {
-			throw new TransformationException("Error occurred when reading transformed file for " + simpleRefsetMapDelta, e);
+			throw new TransformationException("Error occurred when reading simple refset map delta transformed file:" + simpleRefsetMapDelta, e);
 		}
 		
 		try (
@@ -82,17 +82,19 @@ public class LegacyIdTransformationService{
 					writer.write(RF2Constants.LINE_ENDING);
 				}
 				//Generate CTV3 ID
+				LOGGER.info("Start CTV3ID generation");
 				final LegacyIdGenerator idGenerator = new LegacyIdGenerator(idAssignmentBI);
 				final Map<UUID, String> uuidCtv3IdMap = idGenerator.generateCTV3IDs(newConceptUuids);
-				LOGGER.info("Created ctv3Ids for new concept ids found: " + uuidCtv3IdMap.size() );
+				LOGGER.info("Created ctv3Ids for new concept ids found: " + uuidCtv3IdMap.size());
 				//generate snomed id
 				final Map<Long, Long> sctIdAndParentMap = getParentSctId(sctIds, execution);
-				for( final Long sctId : sctIdAndParentMap.keySet()) {
+				for (final Long sctId : sctIdAndParentMap.keySet()) {
 					LOGGER.debug("SctId:" + sctId + " parent sctId:" + sctIdAndParentMap.get(sctId));
 				}
+				LOGGER.info("Start SNOMED ID generation");
 				Map<Long,String> sctIdAndSnomedIdMap = new HashMap<>();
 				if (!sctIdAndParentMap.isEmpty()) {
-					sctIdAndSnomedIdMap = idGenerator.generateSnomedIds( sctIdAndParentMap);
+					sctIdAndSnomedIdMap = idGenerator.generateSnomedIds(sctIdAndParentMap);
 				}
 				LOGGER.info("Generated SnomedIds:" + sctIdAndParentMap.keySet().size());
 				for (final String moduleId : moduleIdAndUuidMap.keySet()) {
@@ -100,7 +102,7 @@ public class LegacyIdTransformationService{
 					if (moduleId.contains("-")) {
 						moduleIdSctId = cachedSctidFactory.getSCTIDFromCache(moduleId).toString();
 					}
-					for(final UUID uuid : moduleIdAndUuidMap.get(moduleId)) {
+					for (final UUID uuid : moduleIdAndUuidMap.get(moduleId)) {
 						final Long sctId = cachedSctidFactory.getSCTIDFromCache(uuid.toString());
 						writer.write(buildSimpleRefsetMapDeltaLine(uuidGenerator.uuid(), effectiveDate, moduleIdSctId, CTV3_ID_REFSET_ID, sctId.toString(), uuidCtv3IdMap.get(uuid)));
 						writer.write(RF2Constants.LINE_ENDING);
@@ -116,15 +118,14 @@ public class LegacyIdTransformationService{
 
 
 private Map<Long, Long> getParentSctId(final List<Long> sourceSctIds, final Execution execution) throws TransformationException {
-	final ArrayList<Long> temp = new ArrayList<>(sourceSctIds);
 	final ParentSctIdFinder finder = new ParentSctIdFinder();
-	final String statedRelationsipDelta = "sct2_StatedRelationship_Delta_INT_" + execution.getBuild().getEffectiveTimeSnomedFormat() + RF2Constants.TXT_FILE_EXTENSION;
+	final String statedRelationsipDelta = STATED_RELATIONSHIP_DELTA_FILE_PREFIX + execution.getBuild().getEffectiveTimeSnomedFormat() + RF2Constants.TXT_FILE_EXTENSION;
 	final InputStream transformedDeltaInput = executionDAO.getTransformedFileAsInputStream(execution, execution.getBuild().getBusinessKey(), statedRelationsipDelta);
-	final Map<Long, Long> result = finder.getParentSctIdFromStatedRelationship(transformedDeltaInput, temp);
+	final Map<Long, Long> result = finder.getParentSctIdFromStatedRelationship(transformedDeltaInput, sourceSctIds);
 	return result;
 }
 
-private String buildSimpleRefsetMapDeltaLine( final String componentId, final String effectiveDate, final String moduleId, final String refsetId, final String uuid, final String mapTarget) {
+private String buildSimpleRefsetMapDeltaLine(final String componentId, final String effectiveDate, final String moduleId, final String refsetId, final String uuid, final String mapTarget) {
 	final StringBuilder builder = new StringBuilder();
 	builder.append(componentId);
 	builder.append(TAB);
